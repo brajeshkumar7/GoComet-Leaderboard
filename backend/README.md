@@ -1,341 +1,176 @@
-# Backend API - Gaming Leaderboard System
+# Backend – Gaming Leaderboard API
 
-Express.js backend API for the Gaming Leaderboard System.
+Express.js API for the gaming leaderboard: submit scores, get top 10, get player rank. Uses MySQL, Redis cache, and optional New Relic APM.
 
-## Features
-
-- RESTful API endpoints for leaderboard and score management
-- MySQL database with InnoDB engine
-- Redis caching for improved performance
-- New Relic APM monitoring (optional)
-- Health check endpoint
-- Error handling and validation
-- Transaction support for data consistency
+---
 
 ## Setup
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+1. **Install:** `npm install`
+2. **Config:** `cp .env.example .env` and set:
+   - **DB_*** – MySQL host, port, user, password, database name
+   - **REDIS_URL** – Redis connection URL (e.g. Upstash)
+   - **NEW_RELIC_LICENSE_KEY** (optional) – for APM
+3. **Database:** Create DB: `CREATE DATABASE leaderboard_db;` (or use `CREATE_DATABASE.sql`). Tables are created on first run.
+4. **Run:** `npm start` (dev: `npm run dev`)
 
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   ```
+Default port: **3000**.
 
-3. Update `.env` with your configuration:
-   - MySQL database credentials
-   - Redis URL (Upstash format: `redis://default:password@host:port`)
-   - New Relic license key (optional, for monitoring)
-
-4. Ensure MySQL is running and create the database:
-   ```sql
-   CREATE DATABASE leaderboard_db;
-   ```
-
-5. Start the server:
-   ```bash
-   npm start
-   ```
-
-   For development with auto-reload:
-   ```bash
-   npm run dev
-   ```
+---
 
 ## API Endpoints
 
-### Health Check
-- `GET /health` - Server health status
+### Assignment APIs
 
-### Leaderboard
-- `GET /api/leaderboard` - Get leaderboard
-  - Query params: `limit` (default: 100), `offset` (default: 0), `gameMode` (optional)
-- `GET /api/leaderboard/:gameMode` - Get leaderboard by game mode
-  - Query params: `limit` (default: 100), `offset` (default: 0)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/leaderboard/submit` | Submit score. Body: `{ "user_id": number, "score": number }`. |
+| GET | `/api/leaderboard/top` | Top 10 players by `total_score` descending. |
+| GET | `/api/leaderboard/rank/:user_id` | Current rank for `user_id`. |
 
-### Scores
-- `POST /api/scores` - Submit a new score
-  - Body: `{ userId, username, score, gameMode?, metadata? }`
-- `GET /api/scores/:userId` - Get user's score
-  - Query params: `gameMode` (optional)
+### Other
+
+- **GET /health** – Health check (status, uptime).
+
+---
+
+## API Flow Explanations
+
+### POST /api/leaderboard/submit
+
+1. **Controller** – Reads `user_id` and `score` from body; validates (required, positive integer / non‑negative integer); parses and passes to service.
+2. **Service** – Runs inside a single **MySQL transaction**:
+   - Upsert user (insert or no-op if exists).
+   - Insert one row into **game_sessions** (user_id, score, game_mode `'default'`).
+   - Upsert **leaderboard**: insert or add `score` to `total_score` for that user.
+   - Recompute **rank** for all rows (window function `ROW_NUMBER() OVER (ORDER BY total_score DESC, user_id)`).
+   - Read back current user’s row (total_score, rank).
+3. **After commit** – Invalidate Redis key `leaderboard:top10`.
+4. **Response** – 201 with `{ success, data: { user_id, score, total_score, rank } }`. On validation error: 400. On server/DB error: 500 (or 503 if DB unavailable).
+
+### GET /api/leaderboard/top
+
+1. **Controller** – No query params; calls service.
+2. **Service** – Check Redis for key `leaderboard:top10`. If hit, return cached list.
+3. **On cache miss** – Query MySQL: join leaderboard + users, `ORDER BY total_score DESC, user_id ASC`, `LIMIT 10`. Store result in Redis with TTL 10s. Return list.
+4. **Response** – 200 with `{ success, data: [ { user_id, username, total_score, rank }, ... ] }`.
+
+### GET /api/leaderboard/rank/:user_id
+
+1. **Controller** – Reads `user_id` from path; validates (positive integer); calls service.
+2. **Service** – Select user’s row from leaderboard (join users for username). If not found, return null. Otherwise compute rank via `COUNT(*) + 1` over rows with higher total_score or same score and lower user_id (index‑friendly).
+3. **Response** – 200 with `{ success, data: { user_id, username, total_score, rank } }`, or 404 if user not in leaderboard. 400 for invalid user_id.
+
+---
 
 ## Database Schema
 
-The application automatically creates the following tables:
+- **users** – `id` (PK, AUTO_INCREMENT), `username` (UNIQUE), `join_date`.
+- **game_sessions** – `id` (PK), `user_id` (FK → users, CASCADE), `score`, `game_mode`, `timestamp`.
+- **leaderboard** – `user_id` (PK, FK → users, CASCADE), `total_score` (BIGINT), `rank` (INT; column name escaped as `` `rank` `` in MySQL).
 
-- **users**: User account information
-  - `id` (INT, PK, AUTO_INCREMENT)
-  - `username` (VARCHAR(100), UNIQUE)
-  - `join_date` (TIMESTAMP)
+Full DDL: `src/db/schema.sql`. Schema is created automatically in `src/db/mysql.js` on startup.
 
-- **game_sessions**: Individual game session scores
-  - `id` (INT, PK, AUTO_INCREMENT)
-  - `user_id` (INT, FK -> users.id, CASCADE DELETE)
-  - `score` (INT)
-  - `game_mode` (VARCHAR(50))
-  - `timestamp` (TIMESTAMP)
+---
 
-- **leaderboard**: Aggregated leaderboard data with rankings
-  - `user_id` (INT, PK, FK -> users.id, CASCADE DELETE)
-  - `total_score` (BIGINT)
-  - `rank` (INT)
+## Database Indexing Rationale
 
-### Indexing Strategy
+| Table | Index | Rationale |
+|-------|--------|-----------|
+| **users** | PRIMARY (id) | PK lookups and FK joins. |
+| **users** | UNIQUE (username) | Enforce uniqueness and lookups by username. |
+| **game_sessions** | (user_id) | Joins and “all sessions for user”; used when aggregating. |
+| **game_sessions** | (game_mode) | Filter by mode if needed. |
+| **game_sessions** | (timestamp DESC) | Chronological queries (e.g. recent sessions). |
+| **leaderboard** | PRIMARY (user_id) | Single-user lookups and FK. |
+| **leaderboard** | (total_score DESC) | **Critical:** `ORDER BY total_score DESC LIMIT 10` for /top; avoids full table scan. |
+| **leaderboard** | (rank) | Rank-based queries if needed. |
 
-The database schema is optimized for high-scale leaderboard operations with strategic indexing:
+**BIGINT for total_score** – Allows very large cumulative scores without overflow.
 
-#### Users Table
-- **idx_username**: Enables fast username lookups and uniqueness checks
-- **Primary key (id)**: Automatic index for foreign key relationships
-
-#### Game Sessions Table
-- **idx_user_id**: Critical for JOIN operations and retrieving all scores for a user
-  - Used when aggregating user scores for leaderboard updates
-  - Enables efficient filtering by user_id
-- **idx_game_mode**: Supports filtering game sessions by game mode
-- **idx_timestamp DESC**: Optimizes chronological queries (recent games first)
-  - DESC order matches common query patterns for "latest games"
-
-#### Leaderboard Table
-- **idx_total_score DESC**: **Most critical index** for leaderboard queries
-  - DESC order optimizes `ORDER BY total_score DESC` queries
-  - Enables efficient top-N leaderboard retrieval without full table scans
-  - Essential for pagination with LIMIT/OFFSET
-- **idx_user_id**: Supports fast lookups of individual user rankings
-  - Used when checking a specific user's position
-- **idx_rank**: Enables rank-based queries and efficient rank updates
-  - Useful for "users ranked between X and Y" queries
-
-#### Foreign Key Constraints
-- All foreign keys use `ON DELETE CASCADE` to maintain referential integrity
-- When a user is deleted, all related game_sessions and leaderboard entries are automatically removed
-
-#### Performance Considerations
-- **BIGINT for total_score**: Supports very large aggregated scores (up to 9,223,372,036,854,775,807)
-- **Connection pooling**: Uses mysql2 connection pool (10 connections) for concurrent request handling
-- **InnoDB engine**: Provides ACID compliance and row-level locking for concurrent updates
-
-See `src/db/schema.sql` for the complete SQL schema with detailed comments.
+---
 
 ## Caching Strategy
 
-The backend uses Redis for caching leaderboard data to improve performance and reduce database load.
+- **What is cached:** Only the result of **GET /api/leaderboard/top**.
+- **Key:** `leaderboard:top10`
+- **TTL:** 10 seconds.
+- **Read path:** Service checks Redis first; on miss, queries MySQL, stores in Redis, returns.
+- **Invalidation:** On every successful **POST /api/leaderboard/submit**, the key is deleted so the next /top request gets fresh data.
+- **Graceful fallback:** If Redis is unavailable, all cache ops no-op; every /top hits MySQL. No client error.
 
-### Cache Implementation
+**Why only /top:** It’s the hottest read and benefits most from cache. Submit and rank lookup are write or single-row read; caching them adds complexity and invalidation rules for limited gain.
 
-- **Cache Key**: `leaderboard:top10`
-- **TTL**: 10 seconds
-- **Cached Endpoint**: `GET /api/leaderboard/top`
-- **Cache Invalidation**: Automatically invalidated on `POST /api/leaderboard/submit`
+---
 
-### Graceful Fallback
+## Concurrency Handling
 
-The caching layer is designed with **graceful degradation**:
+- **Single write path:** Only submit modifies leaderboard; all changes happen inside one transaction.
+- **Connection pool:** mysql2 pool (default 10 connections) so multiple requests can run without blocking each other.
+- **InnoDB:** Row-level locking during updates; transaction isolation prevents dirty reads.
+- **Atomic leaderboard update:** `INSERT ... ON DUPLICATE KEY UPDATE total_score = total_score + VALUES(total_score)` so concurrent submits for the same user don’t lose increments.
+- **Rank recalc:** Done inside the same transaction after the increment, so rank is consistent with total_score for that request.
 
-- If Redis is unavailable, the application continues to function normally
-- Cache operations (get/set/delete) fail silently and log warnings
-- All endpoints fall back to direct database queries when cache is unavailable
-- No errors are thrown to the client if Redis is down
+---
 
-### Caching Trade-offs
+## Atomicity & Consistency Guarantees
 
-#### Benefits
-- **Reduced Database Load**: Top 10 leaderboard queries are served from cache
-- **Improved Response Times**: Cache responses are typically < 1ms vs 10-50ms for database queries
-- **Better Scalability**: Can handle more concurrent requests with cached data
-- **Cost Efficiency**: Reduces database query costs at scale
+- **Atomicity:** Each submit is one transaction. Either all of (user upsert, game_sessions insert, leaderboard update, rank recalc) commit, or none do. No partial state.
+- **Consistency:** Ranks are recomputed in the same transaction as the score update. After commit, cache is invalidated, so the next /top reflects the new state.
+- **No stale rank in response:** Submit returns the rank read from DB after commit. Top 10 is either from cache (at most 10s stale) or from DB after a cache miss/invalidation.
 
-#### Trade-offs
-- **Staleness**: Top 10 leaderboard may be up to 10 seconds stale
-- **Memory Usage**: Redis requires additional infrastructure
-- **Complexity**: Additional system component to monitor and maintain
-- **Cache Invalidation**: Must ensure cache is invalidated on score submissions
+---
 
-#### Design Decisions
+## New Relic Monitoring Usage
 
-1. **10-second TTL**: Balances freshness with cache hit rate
-   - Leaderboard updates are frequent but not instant
-   - 10 seconds provides good cache hit rates while maintaining reasonable freshness
-   - Can be adjusted based on application requirements
+- **Enable:** Set `NEW_RELIC_LICENSE_KEY` (and optionally `NEW_RELIC_APP_NAME`, `NEW_RELIC_ENABLED=true`) in `.env`. Restart the server. Log should show “New Relic monitoring enabled.”
+- **Disable:** Omit license key or set `NEW_RELIC_ENABLED=false`. App runs normally without sending data.
+- **What is tracked:** Request latency and throughput, MySQL queries (and slow query detection), errors, transaction breakdowns. Express and mysql2 are auto-instrumented.
+- **Config:** `newrelic.js` in backend root; e.g. slow query threshold, log level, SQL obfuscation.
+- **Screenshots/report:** See repo root **PERFORMANCE_REPORT.md** for what to capture (APM overview, transaction breakdown, DB tab, alerts).
 
-2. **Cache Invalidation on Submit**: Ensures consistency
-   - When a score is submitted, the top 10 cache is immediately invalidated
-   - Next request will fetch fresh data from database
-   - Prevents serving stale leaderboard data after score submissions
+---
 
-3. **Graceful Fallback**: Ensures reliability
-   - Application remains functional if Redis fails
-   - No single point of failure
-   - Allows for Redis maintenance without downtime
+## What Was Skipped and Why
 
-4. **Single Cache Key**: Simple and effective
-   - Only caching the most frequently accessed endpoint (top 10)
-   - Other endpoints (rank lookup) are fast enough without caching
-   - Keeps cache strategy simple and maintainable
+| Item | Reason |
+|------|--------|
+| **Auth / login** | Out of scope for assignment; APIs are open. Can add JWT or API keys later. |
+| **Rate limiting** | Not required for assignment; can add middleware or gateway limits when needed. |
+| **Caching /top by game_mode** | Assignment APIs use a single global top 10; game_mode exists in DB for future use only. |
+| **Caching rank lookup** | Single-row read with index is fast; cache would need per-user keys and invalidation on any score change. |
+| **PostgreSQL** | Assignment gave PostgreSQL DDL; implementation uses MySQL for consistency with existing stack. Logic (indexes, transactions) is equivalent. |
+| **Full DB population (1M users, 5M sessions)** | Scripts provided (e.g. `scripts/populate_database.sql`) but large runs are slow; reduced sizes recommended for local testing. |
+| **Integration/e2e tests** | Unit tests cover controller validation and service wiring with mocks; full e2e not in scope. |
 
-### Monitoring Recommendations
+---
 
-- Monitor Redis connection status and availability
-- Track cache hit/miss rates
-- Monitor cache memory usage
-- Alert on Redis connection failures (though application continues to work)
+## How to Scale Further
 
-## New Relic Monitoring
+- **Horizontal scaling:** Backend is stateless. Run multiple Node processes behind a load balancer; share MySQL and Redis.
+- **Database:** Add read replicas; direct read-only queries (e.g. /top, /rank) to replicas; keep writes (submit) on primary. Connection pool can be configured per role.
+- **Cache:** Increase TTL for /top if slightly more staleness is acceptable; or cache per game_mode if APIs are extended. Consider Redis Cluster for very high throughput.
+- **Queue for submit:** For very high write volume, accept submit, enqueue job, respond “accepted”; worker applies DB transaction and cache invalidation asynchronously. Adds eventual consistency; document in API contract.
+- **DB sharding:** If leaderboard table grows extremely large, shard by user_id or rank range; top 10 becomes a merge of shard tops or a dedicated “top 10” store updated by workers.
+- **New Relic:** Use alerts on latency and errors; use transaction traces and DB tab to find slow queries and add indexes or optimize queries.
 
-The backend includes optional New Relic APM (Application Performance Monitoring) integration for production monitoring and observability.
-
-### Setup
-
-1. **Get a New Relic License Key**:
-   - Sign up for a New Relic account at https://newrelic.com
-   - Navigate to Account Settings → API Keys
-   - Copy your license key
-
-2. **Enable Monitoring**:
-   Add the following to your `.env` file:
-   ```bash
-   NEW_RELIC_ENABLED=true
-   NEW_RELIC_LICENSE_KEY=your_license_key_here
-   NEW_RELIC_APP_NAME=gocomet-leaderboard-backend
-   ```
-
-3. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-   The `newrelic` package is already included in `package.json`.
-
-4. **Restart the Server**:
-   ```bash
-   npm start
-   ```
-   You should see: `✓ New Relic monitoring enabled`
-
-### Disabling Monitoring
-
-The application works perfectly fine without New Relic. To disable monitoring:
-
-**Option 1**: Don't set `NEW_RELIC_LICENSE_KEY` (recommended for local development)
-```bash
-# Simply omit NEW_RELIC_LICENSE_KEY from .env
-```
-
-**Option 2**: Explicitly disable it
-```bash
-NEW_RELIC_ENABLED=false
-```
-
-When disabled, you'll see: `ℹ New Relic monitoring disabled`
-
-### What Gets Tracked
-
-New Relic automatically instruments Express.js and tracks the following metrics:
-
-#### 1. **Request Metrics**
-- **Response Time**: Latency for each API endpoint
-- **Throughput**: Requests per minute/second
-- **Error Rate**: Percentage of failed requests
-- **Apdex Score**: User satisfaction score based on response times
-
-#### 2. **Database Performance**
-- **Query Time**: Execution time for each MySQL query
-- **Slow Queries**: Queries exceeding 500ms threshold (configurable)
-- **Query Count**: Number of database queries per transaction
-- **Query Details**: SQL statements (obfuscated by default for security)
-
-#### 3. **Transaction Tracing**
-- **Transaction Breakdown**: Time spent in each part of request handling
-  - Middleware execution time
-  - Route handler time
-  - Database query time
-  - External service calls
-- **Transaction Traces**: Detailed traces for slow transactions (> 500ms)
-
-#### 4. **Error Tracking**
-- **Error Collection**: Automatic capture of exceptions and errors
-- **Error Details**: Stack traces, request context, and error frequency
-- **Error Trends**: Error rate over time
-
-#### 5. **Application Metrics**
-- **CPU Usage**: Server CPU utilization
-- **Memory Usage**: Heap and non-heap memory consumption
-- **Garbage Collection**: GC frequency and duration
-
-#### 6. **Custom Attributes**
-- Request metadata (method, path, status code)
-- Environment information (NODE_ENV, app version)
-- Custom business metrics (can be added via New Relic API)
-
-### Automatic Instrumentation
-
-The New Relic agent automatically instruments:
-
-- ✅ **Express.js**: All routes, middleware, and request/response cycles
-- ✅ **MySQL (mysql2)**: All database queries and transactions
-- ✅ **Redis**: Cache operations (if using New Relic Redis instrumentation)
-- ✅ **HTTP Clients**: Outbound HTTP requests
-- ✅ **Error Handling**: Uncaught exceptions and promise rejections
-
-### Configuration
-
-The New Relic configuration is in `newrelic.js` at the project root. Key settings:
-
-- **App Name**: `NEW_RELIC_APP_NAME` (defaults to package name)
-- **Log Level**: `NEW_RELIC_LOG_LEVEL` (default: 'info')
-- **SQL Recording**: Set to 'obfuscated' for security (hides sensitive data)
-- **Slow Query Threshold**: 500ms (queries slower than this are explained)
-- **Error Collection**: Enabled by default
-
-### Viewing Metrics
-
-Once enabled, metrics appear in your New Relic dashboard:
-
-1. **APM Dashboard**: Overview of application performance
-2. **Transaction Traces**: Detailed breakdown of slow requests
-3. **Database**: MySQL query performance and slow queries
-4. **Errors**: Error tracking and analysis
-5. **Alerts**: Set up alerts for performance degradation
-
-### Local Development
-
-For local development, monitoring is **disabled by default**:
-
-- If `NEW_RELIC_LICENSE_KEY` is not set, monitoring is automatically disabled
-- Application runs normally without any New Relic overhead
-- No errors or warnings if New Relic is unavailable
-- Perfect for development without affecting production monitoring
-
-### Production Best Practices
-
-1. **Always Enable in Production**: Set `NEW_RELIC_ENABLED=true` and provide license key
-2. **Use Obfuscated SQL**: Prevents sensitive data from appearing in traces
-3. **Set Appropriate App Names**: Use `NEW_RELIC_APP_NAME` to distinguish environments
-4. **Monitor Key Metrics**: Set up alerts for:
-   - High error rates (> 1%)
-   - Slow response times (> 1 second)
-   - High database query times
-   - Memory leaks or high CPU usage
-
-### Troubleshooting
-
-**Issue**: New Relic not appearing in dashboard
-- Verify `NEW_RELIC_LICENSE_KEY` is correct
-- Check `NEW_RELIC_ENABLED` is not set to `false`
-- Ensure `newrelic` package is installed: `npm install`
-- Check server logs for New Relic initialization messages
-
-**Issue**: Application won't start
-- New Relic initialization failures are caught and logged
-- Application continues to run even if New Relic fails
-- Check `newrelic.js` configuration syntax
-
-**Issue**: Too much data/noise
-- Adjust `NEW_RELIC_LOG_LEVEL` to 'warn' or 'error'
-- Increase slow query threshold in `newrelic.js`
-- Use transaction sampling for high-traffic applications
+---
 
 ## Environment Variables
 
-See `.env.example` for all available configuration options.
+See `.env.example`. Main ones:
+
+- **PORT** – Server port (default 3000).
+- **DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME** – MySQL.
+- **REDIS_URL** – Redis connection URL.
+- **NEW_RELIC_LICENSE_KEY, NEW_RELIC_APP_NAME, NEW_RELIC_ENABLED** – Optional APM.
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+Runs Jest tests in `__tests__/` (e.g. leaderboard controller validation and response shape).
