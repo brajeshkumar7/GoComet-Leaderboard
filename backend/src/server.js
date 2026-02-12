@@ -1,7 +1,7 @@
 require('dotenv').config();
 const app = require('./app');
 const { initDatabase } = require('./db/mysql');
-const { initCache } = require('./cache/redis');
+const { initCache, isAvailable } = require('./cache/redis');
 
 const PORT = process.env.PORT || 3000;
 
@@ -11,9 +11,13 @@ async function startServer() {
     await initDatabase();
     console.log('✓ Database connected');
 
-    // Initialize Redis cache
+    // Initialize Redis cache (graceful fallback if unavailable)
     await initCache();
-    console.log('✓ Redis cache connected');
+    if (isAvailable()) {
+      console.log('✓ Redis cache connected');
+    } else {
+      console.log('⚠ Redis cache unavailable - application will continue without caching');
+    }
 
     // Start server
     app.listen(PORT, () => {

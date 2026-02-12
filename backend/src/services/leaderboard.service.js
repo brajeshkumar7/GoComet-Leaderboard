@@ -1,5 +1,5 @@
 const { getPool, transaction } = require('../db/mysql');
-const { getCache, setCache, deleteCachePattern } = require('../cache/redis');
+const { getCache, setCache, deleteCache } = require('../cache/redis');
 
 async function getLeaderboard({ limit = 100, offset = 0, gameMode = null }) {
   const cacheKey = `leaderboard:${gameMode || 'all'}:${limit}:${offset}`;
@@ -164,6 +164,10 @@ async function submitScore(userId, score) {
 
     const userData = userRows[0];
 
+    // Invalidate top 10 cache since leaderboard has changed
+    // This happens after transaction commit, so it's safe
+    await deleteCache('leaderboard:top10');
+
     return {
       user_id: userData.user_id,
       score: score,
@@ -175,9 +179,20 @@ async function submitScore(userId, score) {
 
 /**
  * Get top 10 users ordered by total_score DESC
+ * Cached with key "leaderboard:top10" and TTL of 10 seconds
  * @returns {Promise<Array>} Array of top 10 users
  */
 async function getTopUsers() {
+  const cacheKey = 'leaderboard:top10';
+  const cacheTTL = 10; // 10 seconds
+
+  // Try to get from cache
+  const cached = await getCache(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Cache miss - fetch from database
   const pool = getPool();
 
   const [rows] = await pool.execute(
@@ -192,12 +207,17 @@ async function getTopUsers() {
      LIMIT 10`
   );
 
-  return rows.map(row => ({
+  const topUsers = rows.map(row => ({
     user_id: row.user_id,
     username: row.username,
     total_score: Number(row.total_score),
     rank: row.rank
   }));
+
+  // Cache the result (graceful fallback if Redis is down)
+  await setCache(cacheKey, topUsers, cacheTTL);
+
+  return topUsers;
 }
 
 /**

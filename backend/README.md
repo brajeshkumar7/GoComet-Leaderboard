@@ -117,6 +117,69 @@ The database schema is optimized for high-scale leaderboard operations with stra
 
 See `src/db/schema.sql` for the complete SQL schema with detailed comments.
 
+## Caching Strategy
+
+The backend uses Redis for caching leaderboard data to improve performance and reduce database load.
+
+### Cache Implementation
+
+- **Cache Key**: `leaderboard:top10`
+- **TTL**: 10 seconds
+- **Cached Endpoint**: `GET /api/leaderboard/top`
+- **Cache Invalidation**: Automatically invalidated on `POST /api/leaderboard/submit`
+
+### Graceful Fallback
+
+The caching layer is designed with **graceful degradation**:
+
+- If Redis is unavailable, the application continues to function normally
+- Cache operations (get/set/delete) fail silently and log warnings
+- All endpoints fall back to direct database queries when cache is unavailable
+- No errors are thrown to the client if Redis is down
+
+### Caching Trade-offs
+
+#### Benefits
+- **Reduced Database Load**: Top 10 leaderboard queries are served from cache
+- **Improved Response Times**: Cache responses are typically < 1ms vs 10-50ms for database queries
+- **Better Scalability**: Can handle more concurrent requests with cached data
+- **Cost Efficiency**: Reduces database query costs at scale
+
+#### Trade-offs
+- **Staleness**: Top 10 leaderboard may be up to 10 seconds stale
+- **Memory Usage**: Redis requires additional infrastructure
+- **Complexity**: Additional system component to monitor and maintain
+- **Cache Invalidation**: Must ensure cache is invalidated on score submissions
+
+#### Design Decisions
+
+1. **10-second TTL**: Balances freshness with cache hit rate
+   - Leaderboard updates are frequent but not instant
+   - 10 seconds provides good cache hit rates while maintaining reasonable freshness
+   - Can be adjusted based on application requirements
+
+2. **Cache Invalidation on Submit**: Ensures consistency
+   - When a score is submitted, the top 10 cache is immediately invalidated
+   - Next request will fetch fresh data from database
+   - Prevents serving stale leaderboard data after score submissions
+
+3. **Graceful Fallback**: Ensures reliability
+   - Application remains functional if Redis fails
+   - No single point of failure
+   - Allows for Redis maintenance without downtime
+
+4. **Single Cache Key**: Simple and effective
+   - Only caching the most frequently accessed endpoint (top 10)
+   - Other endpoints (rank lookup) are fast enough without caching
+   - Keeps cache strategy simple and maintainable
+
+### Monitoring Recommendations
+
+- Monitor Redis connection status and availability
+- Track cache hit/miss rates
+- Monitor cache memory usage
+- Alert on Redis connection failures (though application continues to work)
+
 ## Environment Variables
 
 See `.env.example` for all available configuration options.
