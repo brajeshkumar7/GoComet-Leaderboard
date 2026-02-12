@@ -4,14 +4,16 @@ Load Testing Script for Gaming Leaderboard API
 Simulates real user behavior by continuously submitting scores and fetching leaderboard data.
 """
 
-import requests
+import os
 import random
-import time
+import requests
 import sys
+import time
 from datetime import datetime
 
-# Configuration
-API_BASE_URL = "http://localhost:3000/api/leaderboard"
+# Configuration (assignment used port 8000; we default to 3000)
+# Override: export API_BASE_URL="http://localhost:8000/api/leaderboard"
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:3000/api/leaderboard")
 MAX_USER_ID = 1000000  # Adjust based on your database size
 MIN_SCORE = 100
 MAX_SCORE = 10000
