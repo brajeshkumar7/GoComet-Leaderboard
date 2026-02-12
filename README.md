@@ -129,5 +129,4 @@ npm test
 | **frontend/README.md** | Setup, features, env, build. |
 | **docs/HLD.md** | High-level design: context, data flow, deployment, scope. |
 | **docs/LLD.md** | Low-level design: structure, schema, service logic, cache, config. |
-| **ASSIGNMENT_CHECKLIST.md** | Maps each assignment requirement to the codebase. |
-| **PERFORMANCE_REPORT.md** | How to capture New Relic screenshots for the performance report. |
+| 
