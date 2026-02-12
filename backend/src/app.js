@@ -39,8 +39,11 @@ app.use((req, res) => {
 // Error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error',
+  const isDbUnavailable = err.message && err.message.includes('Database not initialized');
+  const status = isDbUnavailable ? 503 : (err.status || 500);
+  const message = isDbUnavailable ? 'Database unavailable' : (err.message || 'Internal Server Error');
+  res.status(status).json({
+    error: message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });

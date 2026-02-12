@@ -6,11 +6,17 @@ let pool = null;
  * Initialize MySQL connection pool
  * Uses mysql2 library with connection pooling for high-scale performance
  */
+// Use 127.0.0.1 when host is localhost to avoid IPv6 (::1) connection issues on Windows
+function getDbHost() {
+  const host = process.env.DB_HOST || 'localhost';
+  return host === 'localhost' ? '127.0.0.1' : host;
+}
+
 async function initDatabase() {
   try {
     pool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 3306,
+      host: getDbHost(),
+      port: parseInt(process.env.DB_PORT, 10) || 3306,
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'leaderboard_db',
@@ -70,15 +76,16 @@ async function createSchema() {
     `);
 
     // Create leaderboard table
+    // Note: 'rank' is a reserved keyword in MySQL, so it must be escaped with backticks
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS leaderboard (
         user_id INT PRIMARY KEY,
         total_score BIGINT NOT NULL DEFAULT 0,
-        rank INT NOT NULL DEFAULT 0,
+        \`rank\` INT NOT NULL DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         INDEX idx_total_score (total_score DESC),
         INDEX idx_user_id (user_id),
-        INDEX idx_rank (rank)
+        INDEX idx_rank (\`rank\`)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 

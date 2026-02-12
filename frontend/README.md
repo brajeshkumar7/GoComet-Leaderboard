@@ -1,14 +1,14 @@
-# Frontend - Gaming Leaderboard System
+# Frontend - Gaming Leaderboard
 
-React + Vite frontend application for the Gaming Leaderboard System.
+React + Vite frontend for the Gaming Leaderboard backend.
 
 ## Features
 
-- Real-time leaderboard display
-- Submit scores form
-- Filter leaderboard by game mode
-- Responsive design
-- Modern UI with gradient styling
+- **Top 10 Leaderboard** – Renders the top 10 users (rank, user, total score).
+- **Auto-refresh** – Polls `GET /api/leaderboard/top` every 5 seconds.
+- **Rank Lookup** – Look up a user’s rank by `user_id` via `GET /api/leaderboard/rank/:user_id`.
+- **Loading & errors** – Loading states and error messages for both leaderboard and lookup.
+- **Configurable API** – Backend base URL set via `VITE_API_BASE_URL`.
 
 ## Setup
 
@@ -17,40 +17,47 @@ React + Vite frontend application for the Gaming Leaderboard System.
    npm install
    ```
 
-2. Configure API URL (optional):
-   Create a `.env` file in the frontend directory:
+2. (Optional) Set backend URL. Create `.env` in the frontend directory:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and set:
    ```
    VITE_API_BASE_URL=http://localhost:3000
    ```
+   If unset, the app uses `http://localhost:3000`.
 
-3. Start the development server:
+3. Start the dev server:
    ```bash
    npm run dev
    ```
+   App runs at `http://localhost:5173` (Vite default).
 
-The frontend will run on `http://localhost:5173` (Vite default port).
-
-## Build for Production
+## Build
 
 ```bash
 npm run build
 ```
 
-The built files will be in the `dist` directory.
+Output is in `dist/`.
 
-## Preview Production Build
+## Preview production build
 
 ```bash
 npm run preview
 ```
 
-## Environment Variables
+## Environment
 
-- `VITE_API_BASE_URL` - Backend API base URL (default: `http://localhost:3000`)
+| Variable              | Description                          | Default              |
+|-----------------------|--------------------------------------|----------------------|
+| `VITE_API_BASE_URL`   | Backend API base URL (no trailing `/`) | `http://localhost:3000` |
 
-## Features
+## API usage
 
-- **Submit Scores**: Submit new scores with user ID, username, score, and game mode
-- **View Leaderboard**: Display top scores with ranking
-- **Filter by Game Mode**: Filter leaderboard entries by specific game modes
-- **Real-time Updates**: Automatically refreshes after score submission
+The UI uses:
+
+- `GET {VITE_API_BASE_URL}/api/leaderboard/top` – Top 10 (polled every 5s).
+- `GET {VITE_API_BASE_URL}/api/leaderboard/rank/:user_id` – Rank lookup (on demand).
+
+No UI frameworks; plain React, CSS, and `fetch`.

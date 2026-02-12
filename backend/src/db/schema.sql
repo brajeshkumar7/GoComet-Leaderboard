@@ -36,14 +36,15 @@ CREATE TABLE IF NOT EXISTS game_sessions (
 -- Aggregated leaderboard data with rankings
 -- Uses BIGINT for total_score to support very large scores
 -- Foreign key cascades delete when user is removed
+-- Note: 'rank' is a reserved keyword in MySQL, so it must be escaped with backticks
 CREATE TABLE IF NOT EXISTS leaderboard (
   user_id INT PRIMARY KEY,
   total_score BIGINT NOT NULL DEFAULT 0,
-  rank INT NOT NULL DEFAULT 0,
+  `rank` INT NOT NULL DEFAULT 0,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_total_score (total_score DESC),
   INDEX idx_user_id (user_id),
-  INDEX idx_rank (rank)
+  INDEX idx_rank (`rank`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================

@@ -126,8 +126,9 @@ async function submitScore(userId, score) {
 
     // Update leaderboard total_score atomically
     // Use INSERT ... ON DUPLICATE KEY UPDATE with atomic increment
+    // Note: 'rank' is a reserved keyword, so it must be escaped with backticks
     await connection.execute(
-      `INSERT INTO leaderboard (user_id, total_score, rank)
+      `INSERT INTO leaderboard (user_id, total_score, \`rank\`)
        VALUES (?, ?, 0)
        ON DUPLICATE KEY UPDATE
          total_score = total_score + VALUES(total_score)`,
@@ -136,6 +137,7 @@ async function submitScore(userId, score) {
 
     // Recalculate rank using window function (MySQL 8+)
     // This is efficient and handles ties correctly
+    // Note: 'rank' is a reserved keyword, so it must be escaped with backticks
     await connection.execute(
       `UPDATE leaderboard l
        JOIN (
@@ -144,7 +146,7 @@ async function submitScore(userId, score) {
            ROW_NUMBER() OVER (ORDER BY total_score DESC, user_id ASC) as new_rank
          FROM leaderboard
        ) ranked ON l.user_id = ranked.user_id
-       SET l.rank = ranked.new_rank`
+       SET l.\`rank\` = ranked.new_rank`
     );
 
     // Get updated user data
@@ -152,7 +154,7 @@ async function submitScore(userId, score) {
       `SELECT 
          user_id,
          total_score,
-         rank
+         \`rank\`
        FROM leaderboard
        WHERE user_id = ?`,
       [userId]
@@ -200,7 +202,7 @@ async function getTopUsers() {
        l.user_id,
        u.username,
        l.total_score,
-       l.rank
+       l.\`rank\`
      FROM leaderboard l
      INNER JOIN users u ON l.user_id = u.id
      ORDER BY l.total_score DESC, l.user_id ASC
@@ -235,7 +237,7 @@ async function getUserRank(userId) {
        l.user_id,
        u.username,
        l.total_score,
-       l.rank
+       l.\`rank\`
      FROM leaderboard l
      INNER JOIN users u ON l.user_id = u.id
      WHERE l.user_id = ?`,
@@ -250,14 +252,15 @@ async function getUserRank(userId) {
 
   // Calculate rank efficiently using COUNT
   // This uses the idx_total_score index and avoids full table scan
+  // Note: Using 'calculated_rank' as alias to avoid reserved keyword conflict
   const [rankRows] = await pool.execute(
-    `SELECT COUNT(*) + 1 as rank
+    `SELECT COUNT(*) + 1 as calculated_rank
      FROM leaderboard
      WHERE total_score > ? OR (total_score = ? AND user_id < ?)`,
     [userData.total_score, userData.total_score, userId]
   );
 
-  const calculatedRank = rankRows[0].rank;
+  const calculatedRank = rankRows[0].calculated_rank;
 
   return {
     user_id: userData.user_id,

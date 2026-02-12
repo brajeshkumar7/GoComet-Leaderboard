@@ -28,9 +28,14 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
-    // Initialize database connection
-    await initDatabase();
-    console.log('✓ Database connected');
+    // Initialize database connection (optional: server still starts if DB is unavailable)
+    try {
+      await initDatabase();
+      console.log('✓ Database connected');
+    } catch (dbError) {
+      console.warn('⚠ Database unavailable:', dbError.message);
+      console.warn('⚠ Server will start anyway. API routes will return 503 until MySQL is running.');
+    }
 
     // Initialize Redis cache (graceful fallback if unavailable)
     await initCache();
