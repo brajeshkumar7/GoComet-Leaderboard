@@ -129,4 +129,3 @@ npm test
 | **frontend/README.md** | Setup, features, env, build. |
 | **docs/HLD.md** | High-level design: context, data flow, deployment, scope. |
 | **docs/LLD.md** | Low-level design: structure, schema, service logic, cache, config. |
-| 
