@@ -23,6 +23,7 @@
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "mysql2": "^3.9.0",
+    "newrelic": "^11.10.0",
     "redis": "^4.6.12"
   },
   "devDependencies": {
