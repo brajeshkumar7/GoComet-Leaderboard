@@ -1,4 +1,4 @@
-const { getPool } = require('../db/connection');
+const { getPool } = require('../db/mysql');
 const { getCache, setCache, deleteCachePattern } = require('../cache/redis');
 
 async function getLeaderboard({ limit = 100, offset = 0, gameMode = null }) {

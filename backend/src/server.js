@@ -1,6 +1,6 @@
 require('dotenv').config();
 const app = require('./app');
-const { initDatabase } = require('./db/connection');
+const { initDatabase } = require('./db/mysql');
 const { initCache } = require('./cache/redis');
 
 const PORT = process.env.PORT || 3000;

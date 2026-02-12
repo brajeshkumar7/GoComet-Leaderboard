@@ -1,4 +1,4 @@
-const { getPool } = require('../db/connection');
+const { getPool } = require('../db/mysql');
 const { deleteCachePattern } = require('../cache/redis');
 const leaderboardService = require('./leaderboard.service');
 
